@@ -1,15 +1,53 @@
-# request model from frontend
-from __future__ import annotations
+# ---------------------------------------------------------------------------
+# Pydantic models for composite API
+# ---------------------------------------------------------------------------
 
-from typing import Optional, List
-from pydantic import BaseModel, Field
+class PreferenceCreate(BaseModel):
+    """
+    Payload we send to the preferences microservice.
+    Fields match the PreferenceCreate model in preferences.py.
+    """
+    user_id: UUID
+    max_budget: Optional[int] = Field(
+        None,
+        description="Maximum monthly rent budget (max_budget).",
+    )
+    min_size: Optional[int] = Field(
+        None,
+        description="Minimum desired apartment size in square feet (min_size).",
+    )
+    location_area: Optional[List[str]] = Field(
+        None,
+        description="List of preferred neighborhoods/locations.",
+    )
+    rooms: Optional[int] = Field(
+        None,
+        description="Desired number of rooms (e.g., bedrooms).",
+    )
 
-class PreferenceInput(BaseModel):
+
+class UserPreferencesCreateRequest(BaseModel):
     """
-    What the frontend sends when creating preferences for a user.
-    Note: user_id comes from the PATH, not from this body.
+    Payload that the FRONTEND sends to THIS composite microservice.
+    It includes the user_id plus preference inputs, using the same
+    field names as the preferences service.
     """
-    max_budget: Optional[int] = Field(None, ge=0)
-    min_size: Optional[int] = Field(None, ge=0)
+    user_id: UUID
+    max_budget: Optional[int] = None
+    min_size: Optional[int] = None
     location_area: Optional[List[str]] = None
-    rooms: Optional[int] = Field(None, ge=0)
+    rooms: Optional[int] = None
+
+
+class CompositeUserPreferences(BaseModel):
+    """What this composite microservice returns."""
+    user: Dict[str, Any]
+    preferences: Dict[str, Any]
+    links: Dict[str, str]
+
+
+class CompositeUserPreferencesList(BaseModel):
+    """For GET /user-preferences/{user_id} (may return 0..N preferences)."""
+    user: Dict[str, Any]
+    preferences: List[Dict[str, Any]]
+    links: Dict[str, str]

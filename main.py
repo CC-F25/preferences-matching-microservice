@@ -2,32 +2,40 @@ from __future__ import annotations
 
 import os
 from uuid import UUID
+from typing import Optional, Any, Dict, List
 
 import httpx
-from fastapi import FastAPI, HTTPException, status, Path
+from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from typing import Optional, List
 
-from models.preferences import PreferenceCreate, PreferenceRead
-from models.preferences_matching import PreferenceInput
+from models.preferences_matching import PreferenceCreate, UserPreferencesCreateRequest, CompositeUserPreferences, CompositeUserPreferencesList
 
 # ---------------------------------------------------------------------------
-# Config – base URLs for your existing microservices
+# Config: where are the other microservices?
 # ---------------------------------------------------------------------------
 
-USERS_BASE_URL = os.environ.get("USERS_BASE_URL", "http://users-service:8000")
-PREFS_BASE_URL = os.environ.get("PREFS_BASE_URL", "http://preferences-service:8000")
+USERS_SERVICE_BASE_URL = os.environ.get(
+    "USERS_SERVICE_BASE_URL",
+    "https://users-microservice-258517926293.us-central1.run.app",
+)
 
-# -----------------------------------------------------------------------------#
+PREFERENCES_SERVICE_BASE_URL = os.environ.get(
+    "PREFERENCES_SERVICE_BASE_URL",
+    "http://localhost:8000",  # preferences microservice running on same VM
+)
+
+PORT = int(os.environ.get("FASTAPIPORT", "8002"))  # composite service port
+
+# ---------------------------------------------------------------------------
 # FastAPI app
-# -----------------------------------------------------------------------------#
+# ---------------------------------------------------------------------------
 
 app = FastAPI(
-    title="User Preferences Composite API",
+    title="Preferences Matching Composite Microservice",
     description=(
-        "Composite microservice that ties Users and Preferences together. "
-        "Frontend calls this service to create preferences for a user."
+        "Composite microservice that links Users (Cloud Run) and "
+        "Preferences (VM) via business logic."
     ),
     version="0.1.0",
 )
@@ -36,7 +44,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:5000",                     # Firebase local emulator
-        "https://cloud-computing-ui.web.app",        # deployed Firebase site
+        "https://cloud-computing-ui.web.app",        # deployed front-end
         "https://cloud-computing-ui.firebaseapp.com" # alt Firebase domain
     ],
     allow_credentials=True,
@@ -44,82 +52,155 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 # ---------------------------------------------------------------------------
-# Helper to call other microservices
+# Helper functions to talk to other microservices
 # ---------------------------------------------------------------------------
 
-async def get_user_or_404(user_id: UUID) -> dict:
-    """
-    Calls Users microservice to ensure a user exists and return its JSON.
-    """
-    url = f"{USERS_BASE_URL}/users/{user_id}"
+async def fetch_user(user_id: UUID) -> Dict[str, Any]:
+    """GET user from Users microservice, or raise 404/502."""
+    url = f"{USERS_SERVICE_BASE_URL}/users/{user_id}"
     async with httpx.AsyncClient(timeout=5.0) as client:
         resp = await client.get(url)
-
-    if resp.status_code == 404:
-        raise HTTPException(status_code=404, detail="User not found in Users service")
-    if resp.status_code >= 400:
+    if resp.status_code == status.HTTP_404_NOT_FOUND:
+        raise HTTPException(status_code=404, detail="User not found in Users microservice")
+    if resp.status_code != status.HTTP_200_OK:
         raise HTTPException(
             status_code=502,
-            detail=f"Users service error ({resp.status_code}): {resp.text}",
+            detail=f"Users microservice error: {resp.status_code} {resp.text}",
         )
-
     return resp.json()
 
-async def create_preferences_in_service(pref: PreferenceCreate) -> PreferenceRead:
-    """
-    Call the Preferences microservice to create a Preference record.
-    """
-    url = f"{PREFS_BASE_URL}/preferences"
-    async with httpx.AsyncClient(timeout=5.0) as client:
-        resp = await client.post(url, json=pref.model_dump(mode="json"))
 
-    if resp.status_code >= 400:
+async def create_preferences(pref_payload: PreferenceCreate) -> Dict[str, Any]:
+    """POST to preferences microservice to create a preference record."""
+    url = f"{PREFERENCES_SERVICE_BASE_URL}/preferences"
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        resp = await client.post(url, json=pref_payload.model_dump())
+    if resp.status_code not in (status.HTTP_200_OK, status.HTTP_201_CREATED):
         raise HTTPException(
             status_code=502,
-            detail=f"Preferences service error ({resp.status_code}): {resp.text}",
+            detail=f"Preferences microservice error on create: {resp.status_code} {resp.text}",
         )
+    return resp.json()
 
+
+async def fetch_preferences_for_user(user_id: UUID) -> list[Dict[str, Any]]:
+    """
+    GET preferences filtered by user_id from preferences microservice.
+    Adjust the query param / path according to your real preferences API.
+    """
+    # Example: preferences service supports GET /preferences?user_id=...
+    url = f"{PREFERENCES_SERVICE_BASE_URL}/preferences"
+    params = {"user_id": str(user_id)}
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        resp = await client.get(url, params=params)
+
+    if resp.status_code == status.HTTP_404_NOT_FOUND:
+        # Interpret as 'no preferences' instead of an error.
+        return []
+    if resp.status_code != status.HTTP_200_OK:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Preferences microservice error on list: {resp.status_code} {resp.text}",
+        )
     data = resp.json()
-    return PreferenceRead.model_validate(data)
+    # If your preferences API returns a single object, wrap it in a list here.
+    if isinstance(data, dict):
+        return [data]
+    return data
+
 
 # ---------------------------------------------------------------------------
-# Composite endpoint
+# Endpoints
 # ---------------------------------------------------------------------------
-@app.post("/users/{user_id}/preferences", response_model=PreferenceRead, status_code=status.HTTP_201_CREATED)
-async def create_user_preferenes(
-    user_id: UUID = Path(..., description="User ID whose preferences are being set"),
-    body: PreferenceInput = ...,
-):
-    """
-    Creates preferences for a given user:
-    1. Verify user exists by calling Users microservice.
-    2. Fill in the PreferenceCreate payload using user_id and body
-    3. Call Preferences microservice to create/replace preferences
-    4. Return the resulting PreferenceRead to the frontend
-    """
-    # Step 1: Verify user exists
-    user = await get_user_or_404(user_id)
-
-    # Step 2: Build PreferenceCreate payload
-    pref_create = PreferenceCreate(
-        user_id=user_id,
-        max_budget=body.max_budget,
-        min_size=body.min_size,
-        location_area=body.location_area,
-        rooms=body.rooms,
-    )
-
-    # Step 3: Call Preferences microservice
-    created_pref = await create_preferences_in_service(pref_create)
-
-    # Step 4: Return to frontend
-    return created_pref
 
 @app.get("/")
 def root():
     return {
-        "message": "User-Preferences Composite API. See /docs for OpenAPI UI.",
-        "users_base": USERS_BASE_URL,
-        "prefs_base": PREFS_BASE_URL,
+        "message": "Preferences Matching Composite Microservice",
+        "links": {
+            "create_user_preferences": "/user-preferences",
+            "get_user_preferences": "/user-preferences/{user_id}",
+        },
     }
+
+
+@app.post(
+    "/user-preferences",
+    response_model=CompositeUserPreferences,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_user_preferences(payload: UserPreferencesCreateRequest):
+    """
+    Composite endpoint called by the FRONTEND.
+
+    Flow:
+    1. Validate that the user exists in Users microservice.
+    2. Build a preferences payload (adding user_id).
+    3. Create preferences via Preferences microservice.
+    4. Return combined user + preferences + hypermedia links.
+    """
+    # 1. Ensure the user exists
+    user = await fetch_user(payload.user_id)
+
+    # 2. Build PreferenceCreate payload (field names aligned with preferences.py)
+    pref_payload = PreferenceCreate(
+        user_id=payload.user_id,
+        max_budget=payload.max_budget,
+        min_size=payload.min_size,
+        location_area=payload.location_area,
+        rooms=payload.rooms,
+    )
+
+    # 3. Create preferences in the preferences microservice
+    pref = await create_preferences(pref_payload)
+
+    # 4. Build hypermedia links (linked data + relative paths)
+    links = {
+        "self": f"/user-preferences/{payload.user_id}",
+        "user": f"{USERS_SERVICE_BASE_URL}/users/{payload.user_id}",
+        "preferences": f"{PREFERENCES_SERVICE_BASE_URL}/preferences?user_id={payload.user_id}",
+    }
+
+    return CompositeUserPreferences(
+        user=user,
+        preferences=pref,
+        links=links,
+    )
+
+
+@app.get(
+    "/user-preferences/{user_id}",
+    response_model=CompositeUserPreferencesList,
+)
+async def get_user_preferences(user_id: UUID):
+    """
+    Read composite view:
+    - fetch user from Users
+    - fetch preferences from Preferences (by user_id)
+    """
+    user = await fetch_user(user_id)
+    prefs = await fetch_preferences_for_user(user_id)
+
+    links = {
+        "self": f"/user-preferences/{user_id}",
+        "user": f"{USERS_SERVICE_BASE_URL}/users/{user_id}",
+        "preferences": f"{PREFERENCES_SERVICE_BASE_URL}/preferences?user_id={user_id}",
+    }
+
+    return CompositeUserPreferencesList(
+        user=user,
+        preferences=prefs,
+        links=links,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Entrypoint
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run("main:app", host="0.0.0.0", port=PORT, reload=True)
