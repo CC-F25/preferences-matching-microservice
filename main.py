@@ -59,10 +59,12 @@ app.add_middleware(
 
 async def create_preferences(pref_payload: PreferenceCreate) -> Dict[str, Any]:
     """POST to preferences microservice to create/update a preference record."""
-    # Preferences main.py exposes POST "/" as the create/update
     url = f"{PREFERENCES_SERVICE_BASE_URL}/"
+
+    payload = pref_payload.model_dump(mode="json")
+
     async with httpx.AsyncClient(timeout=5.0) as client:
-        resp = await client.post(url, json=pref_payload.model_dump())
+        resp = await client.post(url, json=payload)
 
     if resp.status_code not in (status.HTTP_200_OK, status.HTTP_201_CREATED):
         raise HTTPException(
