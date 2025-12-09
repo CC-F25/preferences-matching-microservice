@@ -94,6 +94,20 @@ async def fetch_preferences_for_user(user_id: UUID) -> list[Dict[str, Any]]:
     # preferences service returns a single object, so wrap into a list
     return [data]
 
+async def fetch_user(user_id: UUID) -> Dict[str, Any]:
+    """GET user from Users microservice, or raise 404/502."""
+    url = f"{USERS_SERVICE_BASE_URL}/users/{user_id}"
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        resp = await client.get(url)
+    if resp.status_code == status.HTTP_404_NOT_FOUND:
+        raise HTTPException(status_code=404, detail="User not found in Users microservice")
+    if resp.status_code != status.HTTP_200_OK:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Users microservice error: {resp.status_code} {resp.text}",
+        )
+    return resp.json()
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
