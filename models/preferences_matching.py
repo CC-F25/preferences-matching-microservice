@@ -1,3 +1,7 @@
+from pydantic import BaseModel, Field
+from uuid import UUID
+from typing import Optional, Any, Dict, List
+
 # ---------------------------------------------------------------------------
 # Pydantic models for composite API
 # ---------------------------------------------------------------------------
