@@ -57,26 +57,13 @@ app.add_middleware(
 # Helper functions to talk to other microservices
 # ---------------------------------------------------------------------------
 
-async def fetch_user(user_id: UUID) -> Dict[str, Any]:
-    """GET user from Users microservice, or raise 404/502."""
-    url = f"{USERS_SERVICE_BASE_URL}/users/{user_id}"
-    async with httpx.AsyncClient(timeout=5.0) as client:
-        resp = await client.get(url)
-    if resp.status_code == status.HTTP_404_NOT_FOUND:
-        raise HTTPException(status_code=404, detail="User not found in Users microservice")
-    if resp.status_code != status.HTTP_200_OK:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Users microservice error: {resp.status_code} {resp.text}",
-        )
-    return resp.json()
-
-
 async def create_preferences(pref_payload: PreferenceCreate) -> Dict[str, Any]:
-    """POST to preferences microservice to create a preference record."""
-    url = f"{PREFERENCES_SERVICE_BASE_URL}/preferences"
+    """POST to preferences microservice to create/update a preference record."""
+    # Preferences main.py exposes POST "/" as the create/update
+    url = f"{PREFERENCES_SERVICE_BASE_URL}/"
     async with httpx.AsyncClient(timeout=5.0) as client:
         resp = await client.post(url, json=pref_payload.model_dump())
+
     if resp.status_code not in (status.HTTP_200_OK, status.HTTP_201_CREATED):
         raise HTTPException(
             status_code=502,
@@ -87,29 +74,25 @@ async def create_preferences(pref_payload: PreferenceCreate) -> Dict[str, Any]:
 
 async def fetch_preferences_for_user(user_id: UUID) -> list[Dict[str, Any]]:
     """
-    GET preferences filtered by user_id from preferences microservice.
-    Adjust the query param / path according to your real preferences API.
+    GET preferences for a specific user by calling GET /{userId}
+    on the preferences microservice.
     """
-    # Example: preferences service supports GET /preferences?user_id=...
-    url = f"{PREFERENCES_SERVICE_BASE_URL}/preferences"
-    params = {"user_id": str(user_id)}
+    url = f"{PREFERENCES_SERVICE_BASE_URL}/{user_id}"
     async with httpx.AsyncClient(timeout=5.0) as client:
-        resp = await client.get(url, params=params)
+        resp = await client.get(url)
 
     if resp.status_code == status.HTTP_404_NOT_FOUND:
-        # Interpret as 'no preferences' instead of an error.
+        # No preferences for this user
         return []
     if resp.status_code != status.HTTP_200_OK:
         raise HTTPException(
             status_code=502,
-            detail=f"Preferences microservice error on list: {resp.status_code} {resp.text}",
+            detail=f"Preferences microservice error on get: {resp.status_code} {resp.text}",
         )
-    data = resp.json()
-    # If your preferences API returns a single object, wrap it in a list here.
-    if isinstance(data, dict):
-        return [data]
-    return data
 
+    data = resp.json()
+    # preferences service returns a single object, so wrap into a list
+    return [data]
 
 # ---------------------------------------------------------------------------
 # Endpoints
@@ -160,7 +143,8 @@ async def create_user_preferences(payload: UserPreferencesCreateRequest):
     links = {
         "self": f"/user-preferences/{payload.user_id}",
         "user": f"{USERS_SERVICE_BASE_URL}/users/{payload.user_id}",
-        "preferences": f"{PREFERENCES_SERVICE_BASE_URL}/preferences?user_id={payload.user_id}",
+        # direct link to the preferences resource for this user
+        "preferences": f"{PREFERENCES_SERVICE_BASE_URL}/{payload.user_id}",
     }
 
     return CompositeUserPreferences(
@@ -186,7 +170,7 @@ async def get_user_preferences(user_id: UUID):
     links = {
         "self": f"/user-preferences/{user_id}",
         "user": f"{USERS_SERVICE_BASE_URL}/users/{user_id}",
-        "preferences": f"{PREFERENCES_SERVICE_BASE_URL}/preferences?user_id={user_id}",
+        "preferences": f"{PREFERENCES_SERVICE_BASE_URL}/{user_id}",
     }
 
     return CompositeUserPreferencesList(
