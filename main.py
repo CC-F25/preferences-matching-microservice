@@ -25,7 +25,7 @@ PREFERENCES_SERVICE_BASE_URL = os.environ.get(
     "http://localhost:8000",  # preferences microservice running on same VM
 )
 
-PORT = int(os.environ.get("FASTAPIPORT", "8002"))  # composite service port
+PORT = int(os.environ.get("FASTAPIPORT", "8080"))  # composite service port
 
 # ---------------------------------------------------------------------------
 # FastAPI app
@@ -43,9 +43,11 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:5000",                     # Firebase local emulator
-        "https://cloud-computing-ui.web.app",        # deployed front-end
-        "https://cloud-computing-ui.firebaseapp.com" # alt Firebase domain
+        "http://localhost:5000",
+        "http://127.0.0.1:5500",
+        "https://cloud-computing-ui.web.app",
+        "https://cloud-computing-ui.firebaseapp.com",
+        "*"  # For testing only - remove in production!
     ],
     allow_credentials=True,
     allow_methods=["*"],
