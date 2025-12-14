@@ -22,10 +22,10 @@ USERS_SERVICE_BASE_URL = os.environ.get(
 
 PREFERENCES_SERVICE_BASE_URL = os.environ.get(
     "PREFERENCES_SERVICE_BASE_URL",
-    "http://localhost:8000",  # preferences microservice running on same VM
+    "http://localhost:8080",  # preferences microservice running on same VM
 )
 
-PORT = int(os.environ.get("FASTAPIPORT", "8080"))  # composite service port
+PORT = int(os.environ.get("FASTAPIPORT", "8000"))  # composite service port
 
 # ---------------------------------------------------------------------------
 # FastAPI app
